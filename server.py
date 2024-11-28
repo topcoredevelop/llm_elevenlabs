@@ -4,6 +4,11 @@ from typing import List, Optional
 import openai
 import os
 from dotenv import load_dotenv
+import logging
+
+# Sett opp logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Laste inn miljøvariabler
 load_dotenv()
@@ -11,7 +16,8 @@ load_dotenv()
 # Hente OpenAI API-nøkkel
 openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
-    raise ValueError("OPENAI_API_KEY not set in .env file")
+    logger.error("OPENAI_API_KEY not set in environment variables")
+    raise ValueError("OPENAI_API_KEY not set in environment variables")
 
 # Opprette FastAPI-app
 app = FastAPI()
@@ -29,16 +35,39 @@ class ChatCompletionRequest(BaseModel):
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest):
     try:
-        # Asynkron forespørsel til OpenAI
+        # Logg forespørselen
+        logger.info(f"Forespørsel mottatt: {request}")
+
+        # Send forespørsel til OpenAI
         response = await openai.ChatCompletion.acreate(
             model=request.model,
             messages=[message.dict() for message in request.messages],
             temperature=request.temperature
         )
-        return response  # Returner svaret fra OpenAI
+
+        # Logg OpenAI-responsen
+        logger.info(f"OpenAI-respons: {response}")
+
+        return response
     except Exception as e:
+        # Logg feilen
+        logger.error(f"Feil oppstod under behandling: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 async def root():
     return {"message": "Server is running. Use POST on /v1/chat/completions."}
+
+@app.get("/test-openai")
+async def test_openai():
+    try:
+        logger.info("Tester OpenAI-tilkobling...")
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Ping"}]
+        )
+        logger.info(f"OpenAI-test respons: {response}")
+        return response
+    except Exception as e:
+        logger.error(f"Feil under OpenAI-test: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
