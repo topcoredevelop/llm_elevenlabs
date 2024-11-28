@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 import logging
 import json
+from fastapi.responses import StreamingResponse
 
 # Sett opp logging
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +33,7 @@ class ChatCompletionRequest(BaseModel):
     messages: List[Message]
     model: str
     temperature: Optional[float] = 0.7
+    stream: Optional[bool] = False
 
 @app.middleware("http")
 async def log_request(request: Request, call_next):
@@ -56,20 +58,33 @@ async def create_chat_completion(request: ChatCompletionRequest):
             if message.role == "system":
                 message.content = "Du er en hjelpsom assistent som kommuniserer på norsk."
 
-        # Logg forespørselen etter endring
-        logger.info(f"Endret forespørsel: {request}")
+        # Hvis strømming er aktivert
+        if request.stream:
+            async def stream_openai():
+                response = await openai.ChatCompletion.acreate(
+                    model=request.model,
+                    messages=[message.dict() for message in request.messages],
+                    temperature=request.temperature,
+                    stream=True  # Aktiver strømming
+                )
+                async for chunk in response:
+                    yield json.dumps(chunk) + "\n"
 
-        # Send forespørselen videre til OpenAI
-        response = await openai.ChatCompletion.acreate(
-            model=request.model,
-            messages=[message.dict() for message in request.messages],
-            temperature=request.temperature
-        )
+            # Returner strømmet respons
+            return StreamingResponse(stream_openai(), media_type="application/json")
+        else:
+            # Vanlig respons (ikke strømmet)
+            response = await openai.ChatCompletion.acreate(
+                model=request.model,
+                messages=[message.dict() for message in request.messages],
+                temperature=request.temperature
+            )
 
-        # Logg OpenAI-responsen
-        logger.info(f"OpenAI-respons mottatt: {response}")
+            # Logg OpenAI-responsen
+            logger.info(f"OpenAI-respons mottatt: {response}")
 
-        return response
+            return response
+
     except Exception as e:
         # Logg feilen
         logger.error(f"Feil oppstod under behandling: {str(e)}", exc_info=True)
