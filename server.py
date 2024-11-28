@@ -46,7 +46,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         )
 
         # Logg OpenAI-responsen
-        logger.info(f"OpenAI-respons: {response}")
+        logger.info(f"OpenAI-respons mottatt: {response}")
 
         return response
     except Exception as e:
@@ -66,7 +66,7 @@ async def test_openai():
             model="gpt-4",
             messages=[{"role": "user", "content": "Ping"}]
         )
-        logger.info(f"OpenAI-test respons: {response}")
+        logger.info(f"OpenAI-test respons mottatt: {response}")
         return response
     except Exception as e:
         logger.error(f"Feil under OpenAI-test: {str(e)}", exc_info=True)
