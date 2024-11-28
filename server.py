@@ -61,6 +61,20 @@ async def create_chat_completion(request: ChatCompletionRequest):
         # Hvis strømming er aktivert
         if request.stream:
             async def stream_openai():
+                # Hardkodet første chunk for ElevenLabs
+                yield json.dumps({
+                    "choices": [
+                        {
+                            "delta": {
+                                "content": "Svar fra assistenten: "
+                            },
+                            "finish_reason": None,
+                            "index": 0
+                        }
+                    ]
+                }) + "\n"
+
+                # Send videre chunks fra OpenAI
                 response = await openai.ChatCompletion.acreate(
                     model=request.model,
                     messages=[message.dict() for message in request.messages],
