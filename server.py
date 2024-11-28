@@ -35,10 +35,15 @@ class ChatCompletionRequest(BaseModel):
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest):
     try:
-        # Logg forespørselen
-        logger.info(f"Forespørsel mottatt: {request}")
+        # Overskrive systemmeldingen
+        for message in request.messages:
+            if message.role == "system":
+                message.content = "Du er en hjelpsom assistent som kommuniserer på norsk."
 
-        # Send forespørsel til OpenAI
+        # Logg forespørselen etter endring
+        logger.info(f"Endret forespørsel: {request}")
+
+        # Send forespørselen videre til OpenAI
         response = await openai.ChatCompletion.acreate(
             model=request.model,
             messages=[message.dict() for message in request.messages],
@@ -64,7 +69,7 @@ async def test_openai():
         logger.info("Tester OpenAI-tilkobling...")
         response = await openai.ChatCompletion.acreate(
             model="gpt-4",
-            messages=[{"role": "user", "content": "Ping"}]
+            messages=[{"role": "system", "content": "Du er en hjelpsom assistent som kommuniserer på norsk."}]
         )
         logger.info(f"OpenAI-test respons mottatt: {response}")
         return response
