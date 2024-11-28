@@ -13,6 +13,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 if not openai.api_key:
     raise ValueError("OPENAI_API_KEY not set in .env file")
 
+# Opprette FastAPI-app
 app = FastAPI()
 
 # Modeller for forespørsel og svar
@@ -28,11 +29,16 @@ class ChatCompletionRequest(BaseModel):
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest):
     try:
-        response = openai.ChatCompletion.create(
+        # Asynkron forespørsel til OpenAI
+        response = await openai.ChatCompletion.acreate(
             model=request.model,
             messages=[message.dict() for message in request.messages],
             temperature=request.temperature
         )
-        return response
+        return response  # Returner svaret fra OpenAI
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/")
+async def root():
+    return {"message": "Server is running. Use POST on /v1/chat/completions."}
