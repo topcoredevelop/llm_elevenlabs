@@ -65,12 +65,13 @@ async def create_chat_completion(request: ChatCompletionRequest):
                     model=request.model,
                     messages=[message.dict() for message in request.messages],
                     temperature=request.temperature,
-                    stream=False  # Aktiver strømming
+                    stream=True  # Aktiver strømming
                 )
                 async for chunk in response:
+                    logger.info(f"Sender chunk: {chunk}")
                     yield json.dumps(chunk) + "\n"
 
-            # Returner strømmet respons
+            logger.info("Starter strømming av respons til klienten...")
             return StreamingResponse(stream_openai(), media_type="application/json")
         else:
             # Vanlig respons (ikke strømmet)
@@ -79,10 +80,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
                 messages=[message.dict() for message in request.messages],
                 temperature=request.temperature
             )
-
-            # Logg OpenAI-responsen
-            logger.info(f"OpenAI-respons mottatt: {response}")
-
+            # Logg hele responsen før den sendes
+            logger.info(f"Sender full respons: {response}")
             return response
 
     except Exception as e:
@@ -92,4 +91,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
 @app.get("/")
 async def root():
+    """
+    Test-endepunkt for å bekrefte at serveren kjører.
+    """
     return {"message": "Server is running. Use POST on /v1/chat/completions."}
