@@ -65,7 +65,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
                     model=request.model,
                     messages=[message.dict() for message in request.messages],
                     temperature=request.temperature,
-                    stream=True  # Aktiver strømming
+                    stream=False  # Aktiver strømming
                 )
                 async for chunk in response:
                     yield json.dumps(chunk) + "\n"
