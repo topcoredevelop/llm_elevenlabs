@@ -1,10 +1,11 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
 import openai
 import os
 from dotenv import load_dotenv
 import logging
+import json
 
 # Sett opp logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +32,21 @@ class ChatCompletionRequest(BaseModel):
     messages: List[Message]
     model: str
     temperature: Optional[float] = 0.7
+
+@app.middleware("http")
+async def log_request(request: Request, call_next):
+    """
+    Logger alle forespørsler som kommer inn til serveren.
+    """
+    try:
+        body = await request.body()
+        logger.info(f"Innkalling til sti: {request.url.path}")
+        logger.info(f"Forespørselens headers: {dict(request.headers)}")
+        logger.info(f"Forespørselens body: {body.decode('utf-8')}")
+    except Exception as e:
+        logger.error(f"Feil under logging av forespørsel: {str(e)}")
+    response = await call_next(request)
+    return response
 
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest):
@@ -62,17 +78,3 @@ async def create_chat_completion(request: ChatCompletionRequest):
 @app.get("/")
 async def root():
     return {"message": "Server is running. Use POST on /v1/chat/completions."}
-
-@app.get("/test-openai")
-async def test_openai():
-    try:
-        logger.info("Tester OpenAI-tilkobling...")
-        response = await openai.ChatCompletion.acreate(
-            model="gpt-4",
-            messages=[{"role": "system", "content": "Du er en hjelpsom assistent som kommuniserer på norsk."}]
-        )
-        logger.info(f"OpenAI-test respons mottatt: {response}")
-        return response
-    except Exception as e:
-        logger.error(f"Feil under OpenAI-test: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
