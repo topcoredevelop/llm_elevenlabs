@@ -1,16 +1,15 @@
 import json
 import os
 import logging
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, validator
+from pydantic import BaseModel
 from typing import List, Optional
 import openai
 import tiktoken
 from dotenv import load_dotenv
 import uvicorn
-import asyncio
 
 # Last miljøvariabler fra .env
 load_dotenv()
@@ -28,11 +27,7 @@ if not openai.api_key:
     raise ValueError("OPENAI_API_KEY mangler i miljøvariabler.")
 
 # Initialiser FastAPI-appen
-app = FastAPI(
-    title="OpenAI Proxy API",
-    description="Et proxy-API for OpenAI med token-håndtering og streaming-støtte",
-    version="1.0.0"
-)
+app = FastAPI()
 
 # Legg til CORS-middleware
 app.add_middleware(
@@ -43,135 +38,64 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pydantic-modeller for forespørsel
+# Pydantic-modeller
 class Message(BaseModel):
     role: str
     content: str
 
-    @validator('role')
-    def validate_role(cls, v):
-        if v not in ['system', 'user', 'assistant']:
-            raise ValueError('Role må være enten system, user, eller assistant')
-        return v
-
 class ChatCompletionRequest(BaseModel):
-    model: str
     messages: List[Message]
+    model: str
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
+    user_id: Optional[str] = None
 
-    @validator('temperature')
-    def validate_temperature(cls, v):
-        if v is not None and (v < 0 or v > 2):
-            raise ValueError('Temperature må være mellom 0 og 2')
-        return v
-
-    @validator('model')
-    def validate_model(cls, v):
-        allowed_models = [
-            'gpt-4-1106-preview',  # Nyeste GPT-4 Turbo
-            'gpt-4',
-            'gpt-4-32k',
-            'gpt-3.5-turbo-1106',  # Nyeste GPT-3.5 Turbo
-            'gpt-3.5-turbo',
-            'gpt-3.5-turbo-16k'
-        ]
-        if v not in allowed_models:
-            raise ValueError(f'Model må være en av følgende: {", ".join(allowed_models)}')
-        return v
-
-# Token-grenser for ulike modeller
-MODEL_TOKEN_LIMITS = {
-    'gpt-4-1106-preview': 4096,  # Maks completion tokens
-    'gpt-4': 4096,
-    'gpt-4-32k': 4096,
-    'gpt-3.5-turbo-1106': 4096,
-    'gpt-3.5-turbo': 4096,
-    'gpt-3.5-turbo-16k': 4096
-}
-
-def get_token_count(text: str, model: str) -> int:
-    """Beregn antall tokens i en tekst for en spesifikk modell."""
+async def process_streaming_response(openai_response):
     try:
-        encoding = tiktoken.encoding_for_model(model)
-        return len(encoding.encode(text))
-    except Exception as e:
-        logger.warning(f"Kunne ikke beregne tokens for {model}: {e}")
-        # Fallback til en enkel estimering
-        return len(text.split()) * 1.3
-
-def adjust_max_tokens(request_data: dict) -> dict:
-    """Juster max_tokens basert på modellens grense og meldingenes lengde."""
-    model = request_data["model"]
-    model_limit = MODEL_TOKEN_LIMITS.get(model, 4096)
-    
-    # Beregn total token-bruk for alle meldinger
-    total_tokens = sum(
-        get_token_count(msg["content"], model)
-        for msg in request_data["messages"]
-    )
-    
-    # Beregn gjenværende tokens, med en mer konservativ grense
-    max_completion_tokens = min(4096, model_limit - total_tokens)  # Maks 4096 completion tokens
-    safe_buffer = 50  # Buffer for å unngå å nå grensen
-    
-    # Juster max_tokens
-    if "max_tokens" in request_data:
-        request_data["max_tokens"] = min(
-            request_data["max_tokens"],
-            max(max_completion_tokens - safe_buffer, 0)
-        )
-    else:
-        request_data["max_tokens"] = max(max_completion_tokens - safe_buffer, 0)
-    
-    logger.debug(f"Adjusted max_tokens: {request_data['max_tokens']}")
-    return request_data
-
-async def process_chunks(response):
-    """Prosesser chunks fra OpenAI response"""
-    async for chunk in response:
-        if chunk and chunk.get("choices"):
-            delta = chunk["choices"][0].get("delta", {})
-            if delta.get("content"):
-                yield f'data: {json.dumps({"choices": [{"delta": delta, "finish_reason": None}]})}\n\n'
-        elif chunk and chunk.get("choices")[0].get("finish_reason") is not None:
-            yield f'data: {json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]})}\n\n'
-            yield "data: [DONE]\n\n"
-            break
-
-async def event_stream(openai_response):
-    """Håndter streaming av OpenAI-respons."""
-    try:
-        async for line in process_chunks(openai_response):
-            yield line
+        async for chunk in openai_response:
+            # Konverter chunk til dict og send
+            chunk_dict = {
+                "id": chunk.id,
+                "object": chunk.object,
+                "created": chunk.created,
+                "model": chunk.model,
+                "choices": [
+                    {
+                        "index": choice.index,
+                        "delta": {
+                            "role": choice.delta.role if choice.delta.role else "assistant",
+                            "content": choice.delta.content if choice.delta.content else ""
+                        },
+                        "finish_reason": choice.finish_reason
+                    } for choice in chunk.choices
+                ]
+            }
+            yield f"data: {json.dumps(chunk_dict)}\n\n"
+        yield "data: [DONE]\n\n"
     except Exception as e:
         logger.error(f"Streaming error: {e}")
-        yield f'data: {json.dumps({"error": str(e)})}\n\n'
+        yield f"data: {json.dumps({'error': 'Internal error occurred!'})}\n\n"
 
 @app.post("/v1/chat/completions")
-async def create_chat_completion(request: ChatCompletionRequest, raw_request: Request):
-    """Hovedendepunkt for chat completions."""
+async def create_chat_completion(request: ChatCompletionRequest):
     try:
-        # Log innkommende forespørsel
-        client_host = raw_request.client.host
-        logger.info(f"Innkommende forespørsel fra {client_host} for modell {request.model}")
-        
-        # Konverter forespørselen til en ordbok og juster tokens
+        # Konverter request til dict og håndter user_id
         request_data = request.dict(exclude_none=True)
-        request_data = adjust_max_tokens(request_data)
-        
-        # Send forespørselen til OpenAI
+        if "user_id" in request_data:
+            request_data["user"] = request_data.pop("user_id")
+
+        # Send forespørsel til OpenAI
         response = await openai.ChatCompletion.acreate(**request_data)
-        
-        # Håndter streaming hvis aktivert
+
+        # Håndter streaming-respons
         if request_data.get("stream", False):
             return StreamingResponse(
-                event_stream(response),
+                process_streaming_response(response),
                 media_type="text/event-stream"
             )
-        
-        # Returner hele responsen for ikke-streaming
+
+        # Returner vanlig respons
         return response
 
     except Exception as e:
@@ -180,35 +104,10 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
 
 @app.get("/health")
 async def health_check():
-    """Endepunkt for helse-sjekk."""
-    try:
-        # Test OpenAI-tilkobling
-        openai.Model.list()
-        return {
-            "status": "healthy",
-            "openai_connection": "ok",
-            "api_version": "1.0.0"
-        }
-    except Exception as e:
-        logger.error(f"Helsesjekk feilet: {str(e)}")
-        raise HTTPException(
-            status_code=503,
-            detail="Service unavailable"
-        )
-
-@app.get("/")
-async def root():
-    return {
-        "message": "OpenAI Proxy API",
-        "version": "1.0.0",
-        "status": "running"
-    }
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
-    # Hent port fra miljøvariabel (Railway setter denne)
     port = int(os.getenv("PORT", 8000))
-    
-    # Start serveren
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
