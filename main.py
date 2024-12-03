@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
 import uvicorn
 
 # Last miljøvariabler fra .env
