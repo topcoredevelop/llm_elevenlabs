@@ -57,7 +57,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         logging.debug(f"Inngående forespørsel: {request.json()}")
 
         # Send forespørsel til OpenAI API
-        openai_response = openai.ChatCompletion.acreate(
+        openai_response = await openai.ChatCompletion.acreate(
             model=request.model,
             messages=[msg.dict() for msg in request.messages],
             temperature=request.temperature,
@@ -70,8 +70,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             return StreamingResponse(event_stream(openai_response), media_type="text/event-stream")
 
         # Returner full respons for non-streaming
-        result = await openai_response
-        return result
+        return openai_response
 
     except Exception as e:
         logging.error(f"Feil under behandling: {str(e)}")
