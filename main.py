@@ -6,9 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
-import openai
-import tiktoken
-from dotenv import load_dotenv
+from openai import AsyncOpenAI
 import uvicorn
 
 # Last miljøvariabler fra .env
@@ -21,9 +19,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Sett OpenAI API-nøkkel
-openai.api_key = os.getenv("OPENAI_API_KEY")
-if not openai.api_key:
+# Initialiser OpenAI klient
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+if not client.api_key:
     raise ValueError("OPENAI_API_KEY mangler i miljøvariabler.")
 
 # Initialiser FastAPI-appen
@@ -51,52 +49,32 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     user_id: Optional[str] = None
 
-async def process_streaming_response(openai_response):
+async def event_stream(completion):
     try:
-        async for chunk in openai_response:
-            # Konverter chunk til dict og send
-            chunk_dict = {
-                "id": chunk.id,
-                "object": chunk.object,
-                "created": chunk.created,
-                "model": chunk.model,
-                "choices": [
-                    {
-                        "index": choice.index,
-                        "delta": {
-                            "role": choice.delta.role if choice.delta.role else "assistant",
-                            "content": choice.delta.content if choice.delta.content else ""
-                        },
-                        "finish_reason": choice.finish_reason
-                    } for choice in chunk.choices
-                ]
-            }
+        async for chunk in completion:
+            chunk_dict = chunk.model_dump()
             yield f"data: {json.dumps(chunk_dict)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
-        logger.error(f"Streaming error: {e}")
-        yield f"data: {json.dumps({'error': 'Internal error occurred!'})}\n\n"
+        logger.error(f"Streaming error: {str(e)}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest):
     try:
-        # Konverter request til dict og håndter user_id
         request_data = request.dict(exclude_none=True)
         if "user_id" in request_data:
             request_data["user"] = request_data.pop("user_id")
 
-        # Send forespørsel til OpenAI
-        response = await openai.ChatCompletion.acreate(**request_data)
+        completion = await client.chat.completions.create(**request_data)
 
-        # Håndter streaming-respons
         if request_data.get("stream", False):
             return StreamingResponse(
-                process_streaming_response(response),
+                event_stream(completion),
                 media_type="text/event-stream"
             )
-
-        # Returner vanlig respons
-        return response
+        
+        return completion.model_dump()
 
     except Exception as e:
         logger.error(f"Error i chat completion: {str(e)}")
