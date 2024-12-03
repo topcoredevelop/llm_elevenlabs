@@ -83,12 +83,12 @@ class ChatCompletionRequest(BaseModel):
 
 # Token-grenser for ulike modeller
 MODEL_TOKEN_LIMITS = {
-    'gpt-4-1106-preview': 128000,  # GPT-4 Turbo har 128k kontekst
-    'gpt-4': 8192,
-    'gpt-4-32k': 32768,
-    'gpt-3.5-turbo-1106': 16385,
+    'gpt-4-1106-preview': 4096,  # Maks completion tokens
+    'gpt-4': 4096,
+    'gpt-4-32k': 4096,
+    'gpt-3.5-turbo-1106': 4096,
     'gpt-3.5-turbo': 4096,
-    'gpt-3.5-turbo-16k': 16384
+    'gpt-3.5-turbo-16k': 4096
 }
 
 def get_token_count(text: str, model: str) -> int:
@@ -112,18 +112,18 @@ def adjust_max_tokens(request_data: dict) -> dict:
         for msg in request_data["messages"]
     )
     
-    # Beregn gjenværende tokens
-    remaining_tokens = model_limit - total_tokens
+    # Beregn gjenværende tokens, med en mer konservativ grense
+    max_completion_tokens = min(4096, model_limit - total_tokens)  # Maks 4096 completion tokens
     safe_buffer = 50  # Buffer for å unngå å nå grensen
     
     # Juster max_tokens
     if "max_tokens" in request_data:
         request_data["max_tokens"] = min(
             request_data["max_tokens"],
-            max(remaining_tokens - safe_buffer, 0)
+            max(max_completion_tokens - safe_buffer, 0)
         )
     else:
-        request_data["max_tokens"] = max(remaining_tokens - safe_buffer, 0)
+        request_data["max_tokens"] = max(max_completion_tokens - safe_buffer, 0)
     
     logger.debug(f"Adjusted max_tokens: {request_data['max_tokens']}")
     return request_data
