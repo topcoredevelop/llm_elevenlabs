@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+import tiktoken
 import uvicorn
 
 # Last miljøvariabler fra .env
@@ -37,6 +38,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Token grenser for modeller
+MODEL_TOKEN_LIMITS = {
+    'gpt-4-1106-preview': 128000,
+    'gpt-4': 8192,
+    'gpt-4-32k': 32768,
+    'gpt-3.5-turbo': 4096,
+    'gpt-3.5-turbo-16k': 16384
+}
+
 # Pydantic-modeller
 class Message(BaseModel):
     role: str
@@ -49,6 +59,35 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
     user_id: Optional[str] = None
+
+def count_tokens(text: str, model: str) -> int:
+    """Beregn antall tokens i teksten"""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+        return len(encoding.encode(text))
+    except Exception:
+        return len(text.split()) * 2  # Enkel fallback
+
+def adjust_max_tokens(request_data: dict) -> dict:
+    """Juster max_tokens basert på modell og innhold"""
+    model = request_data["model"]
+    model_limit = MODEL_TOKEN_LIMITS.get(model, 4096)
+    
+    # Beregn tokens brukt i meldinger
+    total_tokens = sum(count_tokens(msg["content"], model) 
+                      for msg in request_data["messages"])
+    
+    # Beregn tilgjengelige tokens
+    available_tokens = model_limit - total_tokens - 50  # Buffer på 50 tokens
+    
+    # Sett max_tokens
+    if "max_tokens" not in request_data or request_data["max_tokens"] is None:
+        request_data["max_tokens"] = min(available_tokens, 4096)
+    else:
+        request_data["max_tokens"] = min(request_data["max_tokens"], available_tokens)
+    
+    logger.info(f"Justerte max_tokens til {request_data['max_tokens']}")
+    return request_data
 
 async def event_stream(completion):
     try:
@@ -66,6 +105,9 @@ async def create_chat_completion(request: ChatCompletionRequest):
         request_data = request.dict(exclude_none=True)
         if "user_id" in request_data:
             request_data["user"] = request_data.pop("user_id")
+            
+        # Juster max_tokens før sending
+        request_data = adjust_max_tokens(request_data)
 
         completion = await client.chat.completions.create(**request_data)
 
