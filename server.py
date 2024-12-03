@@ -29,7 +29,7 @@ class Message(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model: str
-    messages: List[Message]
+    messages: List[Message]  # Liste over Message-objekter
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
@@ -37,7 +37,7 @@ class ChatCompletionRequest(BaseModel):
 # Funksjon for å justere max_tokens
 def adjust_max_tokens(request_data):
     # Beregn tokenforbruk for meldinger
-    message_tokens = sum(len(msg.content.split()) for msg in request_data["messages"])
+    message_tokens = sum(len(msg["content"].split()) for msg in request_data["messages"])
     remaining_tokens = 8192 - message_tokens
 
     # Juster max_tokens hvis nødvendig
@@ -68,8 +68,13 @@ async def event_stream(openai_response):
 @app.post("/v1/chat/completions")
 async def create_chat_completion(request: ChatCompletionRequest):
     try:
-        # Konverter forespørsel til dict og juster max_tokens
+        # Konverter forespørselen til en ordbok
         request_data = request.dict(exclude_none=True)
+
+        # Valider meldingsstrukturen (konverter fra dict til Message-objekter)
+        request_data["messages"] = [Message(**msg).dict() for msg in request_data["messages"]]
+
+        # Juster max_tokens
         request_data = adjust_max_tokens(request_data)
 
         # Send forespørselen til OpenAI
