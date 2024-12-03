@@ -10,6 +10,7 @@ import openai
 import tiktoken
 from dotenv import load_dotenv
 import uvicorn
+import asyncio
 
 # Last miljøvariabler fra .env
 load_dotenv()
@@ -36,7 +37,7 @@ app = FastAPI(
 # Legg til CORS-middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Juster dette for produksjon
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -118,18 +119,23 @@ def adjust_max_tokens(request_data: dict) -> dict:
     logger.debug(f"Adjusted max_tokens: {request_data['max_tokens']}")
     return request_data
 
+async def process_chunks(response):
+    """Prosesser chunks fra OpenAI response"""
+    async for chunk in response:
+        if chunk and chunk.get("choices"):
+            delta = chunk["choices"][0].get("delta", {})
+            if delta.get("content"):
+                yield f'data: {json.dumps({"choices": [{"delta": delta, "finish_reason": None}]})}\n\n'
+        elif chunk and chunk.get("choices")[0].get("finish_reason") is not None:
+            yield f'data: {json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]})}\n\n'
+            yield "data: [DONE]\n\n"
+            break
+
 async def event_stream(openai_response):
     """Håndter streaming av OpenAI-respons."""
     try:
-        async for chunk in openai_response:
-            if chunk and chunk.get("choices"):
-                delta = chunk["choices"][0].get("delta", {})
-                if delta.get("content"):
-                    yield f'data: {json.dumps({"choices": [{"delta": delta, "finish_reason": None}]})}\n\n'
-            elif chunk and chunk.get("choices")[0].get("finish_reason") is not None:
-                yield f'data: {json.dumps({"choices": [{"delta": {}, "finish_reason": "stop"}]})}\n\n'
-                yield "data: [DONE]\n\n"
-                break
+        async for line in process_chunks(openai_response):
+            yield line
     except Exception as e:
         logger.error(f"Streaming error: {e}")
         yield f'data: {json.dumps({"error": str(e)})}\n\n'
@@ -147,18 +153,17 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
         request_data = adjust_max_tokens(request_data)
         
         # Send forespørselen til OpenAI
-        openai_response = openai.ChatCompletion.acreate(**request_data)
+        response = await openai.ChatCompletion.acreate(**request_data)
         
         # Håndter streaming hvis aktivert
         if request_data.get("stream", False):
             return StreamingResponse(
-                event_stream(openai_response),
+                event_stream(response),
                 media_type="text/event-stream"
             )
         
         # Returner hele responsen for ikke-streaming
-        result = await openai_response
-        return result
+        return response
 
     except Exception as e:
         logger.error(f"Error i chat completion: {str(e)}")
@@ -182,7 +187,6 @@ async def health_check():
             detail="Service unavailable"
         )
 
-# Legg til en enkel hjemmeside-rute
 @app.get("/")
 async def root():
     return {
@@ -200,5 +204,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=port,
-        reload=False  # Sett til False i produksjon
+        reload=False
     )
