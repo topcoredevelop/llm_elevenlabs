@@ -69,15 +69,24 @@ class ChatCompletionRequest(BaseModel):
 
     @validator('model')
     def validate_model(cls, v):
-        allowed_models = ['gpt-4', 'gpt-4-32k', 'gpt-3.5-turbo', 'gpt-3.5-turbo-16k']
+        allowed_models = [
+            'gpt-4-1106-preview',  # Nyeste GPT-4 Turbo
+            'gpt-4',
+            'gpt-4-32k',
+            'gpt-3.5-turbo-1106',  # Nyeste GPT-3.5 Turbo
+            'gpt-3.5-turbo',
+            'gpt-3.5-turbo-16k'
+        ]
         if v not in allowed_models:
             raise ValueError(f'Model må være en av følgende: {", ".join(allowed_models)}')
         return v
 
 # Token-grenser for ulike modeller
 MODEL_TOKEN_LIMITS = {
+    'gpt-4-1106-preview': 128000,  # GPT-4 Turbo har 128k kontekst
     'gpt-4': 8192,
     'gpt-4-32k': 32768,
+    'gpt-3.5-turbo-1106': 16385,
     'gpt-3.5-turbo': 4096,
     'gpt-3.5-turbo-16k': 16384
 }
