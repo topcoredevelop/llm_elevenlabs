@@ -1,74 +1,80 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-import openai
-import asyncio
+import json
 import os
+import fastapi
+from fastapi.responses import StreamingResponse
+from openai import AsyncOpenAI
+import uvicorn
 import logging
+from dotenv import load_dotenv
+from pydantic import BaseModel
+from typing import List, Optional
 
-# Initialiser logger for debugging
+# Last inn miljøvariabler fra .env-filen
+load_dotenv()
+
+# Hent OpenAI API-nøkkelen fra miljøvariabler
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY ikke funnet i miljøvariabler")
+
+app = fastapi.FastAPI()
+oai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# Logger for debugging
 logging.basicConfig(level=logging.DEBUG)
 
-# Initialiser FastAPI-appen
-app = FastAPI()
+# Modell for forespørsler
+class Message(BaseModel):
+    role: str
+    content: str
 
-# Sett OpenAI API-nøkkel fra miljøvariabler
-openai.api_key = os.getenv("OPENAI_API_KEY")
-if not openai.api_key:
-    raise ValueError("OPENAI_API_KEY er ikke satt i miljøvariablene.")
-
-# Modell for chat-forespørsler
 class ChatCompletionRequest(BaseModel):
+    messages: List[Message]
     model: str
-    messages: list
-    stream: bool = False
+    temperature: Optional[float] = 0.7
+    max_tokens: Optional[int] = None
+    stream: Optional[bool] = False
+    user_id: Optional[str] = None
 
-# Funksjon for å håndtere streaming-respons
-async def event_stream(openai_response):
-    try:
-        async for chunk in openai_response:
-            if chunk.get("choices"):
-                delta = chunk["choices"][0].get("delta", {})
-                if delta.get("content"):
-                    yield f'data: {{"choices": [{{"delta": {delta}, "finish_reason": null}}]}}\n\n'
-            elif chunk.get("choices")[0].get("finish_reason") is not None:
-                # Siste chunk som avslutter streamen
-                yield "data: [DONE]\n\n"
-                break
-    except Exception as e:
-        logging.error(f"Feil under streaming: {str(e)}")
-        yield f'data: [ERROR: "{str(e)}"]\n\n'
-
-# Endepunkt for chat-kompletteringer
 @app.post("/v1/chat/completions")
-async def create_chat_completion(request: ChatCompletionRequest):
+async def create_chat_completion(request: ChatCompletionRequest) -> StreamingResponse:
     try:
-        logging.debug(f"Inkommende forespørsel: {request}")
-        # Valider forespørselen
-        if not request.messages:
-            raise HTTPException(status_code=400, detail="Meldinger mangler i forespørselen.")
+        # Konverter forespørselen til et dictionary-format
+        oai_request = request.dict(exclude_none=True)
+        if "user_id" in oai_request:
+            oai_request["user"] = oai_request.pop("user_id")
 
-        # Kall OpenAI API
-        openai_response = await openai.ChatCompletion.acreate(
-            model=request.model,
-            messages=request.messages,
-            stream=request.stream
-        )
+        logging.debug(f"Inngående forespørsel: {oai_request}")
 
-        # Returner streaming-respons hvis aktivert
+        # Håndter streaming-respons
         if request.stream:
-            return StreamingResponse(event_stream(openai_response), media_type="text/event-stream")
+            chat_completion_coroutine = oai_client.chat.completions.create(**oai_request)
 
-        # Returner komplett respons for non-streaming
-        result = await openai_response
-        logging.debug(f"Respons fra OpenAI (non-streaming): {result}")
-        return result
+            async def event_stream():
+                try:
+                    async for chunk in chat_completion_coroutine:
+                        # Konverter til JSON
+                        chunk_dict = chunk.model_dump()
+                        yield f"data: {json.dumps(chunk_dict)}\n\n"
+                    yield "data: [DONE]\n\n"
+                except Exception as e:
+                    logging.error(f"En feil oppsto: {str(e)}")
+                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+        # Håndter non-streaming respons
+        chat_completion = await oai_client.chat.completions.create(**oai_request)
+        return chat_completion
+
     except Exception as e:
-        logging.error(f"Feil: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Feil i behandling: {str(e)}")
+        raise fastapi.HTTPException(status_code=500, detail=str(e))
 
-# Helse-sjekk for serveren
+# Endepunkt for helse-sjekk
 @app.get("/health")
 async def health_check():
-    logging.debug("Helse-sjekk utført.")
     return {"status": "ok"}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8080)
