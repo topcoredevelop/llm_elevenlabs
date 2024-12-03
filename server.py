@@ -17,7 +17,7 @@ app = FastAPI()
 # Sett OpenAI API-nøkkel fra miljøvariabler
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# CORS-innstillinger (valgfritt hvis du tester fra forskjellige domener)
+# CORS-innstillinger
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,7 +46,8 @@ async def log_requests(request: Request, call_next):
 # Funksjon for å håndtere streaming-respons
 async def event_stream(openai_response):
     try:
-        async for chunk in openai_response:
+        # Vent på OpenAI-responsen før vi begynner å iterere
+        async for chunk in await openai_response:
             if chunk.get("choices"):
                 delta = chunk["choices"][0].get("delta", {})
                 if delta.get("content"):
