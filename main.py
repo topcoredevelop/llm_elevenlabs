@@ -125,6 +125,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
 @app.get("/health")
 async def health_check():
+    print('')
     return {"status": "healthy"}
 
 if __name__ == "__main__":
